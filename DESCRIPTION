@@ -1,0 +1,32 @@
+Package: rpsurv
+Title: Fast Royston-Parmar Flexible Parametric Survival Models
+Version: 0.7.1
+Authors@R: person("Imad", "El Badisy", email = "elbadisyimad@gmail.com", role = c("aut", "cre"))
+Description: Fits Royston-Parmar flexible parametric survival models
+    (Royston and Parmar, 2002) <doi:10.1002/sim.1203> on the log
+    cumulative hazard, odds, and
+    probit scales, with time-varying (non-proportional) covariate
+    effects via restricted cubic splines in log time. The likelihood
+    and its analytic gradient are evaluated in C++ with 'RcppParallel',
+    giving large speedups over pure-R implementations for large
+    datasets.
+License: MIT + file LICENSE
+URL: https://github.com/ielbadisy/rpsurv
+BugReports: https://github.com/ielbadisy/rpsurv/issues
+Encoding: UTF-8
+RoxygenNote: 7.3.3
+Depends: R (>= 4.1.0)
+Imports: Rcpp, RcppParallel, survival, stats, graphics, grDevices
+LinkingTo: Rcpp, RcppParallel
+SystemRequirements: GNU make
+Suggests: rstpm2, flexsurv, numDeriv, testthat (>= 3.0.0), knitr,
+        rmarkdown
+Config/testthat/edition: 3
+VignetteBuilder: knitr
+LazyData: true
+NeedsCompilation: yes
+Packaged: 2026-08-31 17:24:07 UTC; imad-el-badisy
+Author: Imad El Badisy [aut, cre]
+Maintainer: Imad El Badisy <elbadisyimad@gmail.com>
+Repository: CRAN
+Date/Publication: 2026-09-11 13:50:02 UTC
