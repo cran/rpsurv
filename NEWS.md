@@ -1,3 +1,34 @@
+# rpsurv 0.8.1
+
+* `tvecurve()` and `nlecurve()` now return data frames of class
+  `"tvecurve"` and `"nlecurve"`, which keep the covariate, reference value
+  and scale as attributes.
+* New `plot()` methods for both: the hazard ratio (or log effect) against
+  time or against the covariate, with its 95% confidence band, a reference
+  line at no effect and a log y axis by default. `add = TRUE` overlays
+  curves.
+
+# rpsurv 0.8.0
+
+* New `nle` and `nle.df` arguments to `rpsurv()`: a smooth non-linear
+  effect g(x) for numeric covariates, modelled as a restricted cubic
+  spline in the covariate (knots at its range and equally spaced
+  centiles, basis rescaled to [0, 1] for conditioning). It is specified
+  separately from the time-varying effect (`tve`, `tve.df`), and a
+  covariate may have both, giving g(x) + beta(t) x. `nle.df = 1`
+  reproduces the linear fit exactly.
+* `tve.df` and `nle.df` accept a single value or a vector named by
+  covariate.
+* New `nlecurve()`: g(x) - g(ref) with a delta-method 95% confidence
+  interval (the log hazard ratio versus `ref` on the hazard scale when
+  the covariate is not also time-varying).
+* New `tvecurve()`: the time-varying effect, either as the log
+  instantaneous hazard ratio per unit increase (`type = "hr"`, matching
+  `predict(type = "hr")`) or as the coefficient function beta(t) on the
+  linear-predictor scale (`type = "link"`). For a covariate in both `nle`
+  and `tve`, `tvecurve()` and `nlecurve()` return the two components
+  separately, and their sum equals the total log hazard ratio.
+
 # rpsurv 0.7.1
 
 * CRAN resubmission: added a `<doi:10.1002/sim.1203>` link for the
