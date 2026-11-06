@@ -45,14 +45,14 @@ fit_cp$counting
 coef(fit_cp)
 
 ## ----diagnostics, fig.cap = "Cox-Snell residual check: points should lie near the diagonal."----
-coxsnell_plot(fit)
+plot(fit, type = "coxsnell")
 
 ## ----deviance-resid-----------------------------------------------------------
 dev_resid <- residuals(fit, type = "deviance")
 summary(dev_resid)
 
 ## ----km-compare, fig.cap = "Model vs. Kaplan-Meier, by hormonal therapy status."----
-km_compare_plot(fit, by = "hormon")
+plot(fit, type = "km", by = "hormon")
 
 ## ----validation, eval = requireNamespace("rstpm2", quietly = TRUE)------------
 suppressPackageStartupMessages(library(rstpm2))
@@ -69,6 +69,12 @@ knitr::kable(res, digits = 3, col.names = c("n", "rpsurv (s)", "stpm2 (s)", "fle
 
 ## ----benchmark-fig, echo = FALSE, out.width = "90%", fig.cap = "Fit time vs. sample size (log-log axes)."----
 knitr::include_graphics("figures/benchmark_speed.png")
+
+## ----benchmark-extended, echo = FALSE-----------------------------------------
+ext <- readRDS(system.file("extdata", "benchmark_extended.rds", package = "rpsurv"))
+ext$speedup <- round(ext$rstpm2 / ext$rpsurv, 1)
+knitr::kable(ext, digits = 3,
+             col.names = c("model", "n", "rpsurv (s)", "stpm2 (s)", "speedup"))
 
 ## ----benchmark-code, eval = FALSE---------------------------------------------
 # simulate_data <- function(n, seed = 1) {

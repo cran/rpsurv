@@ -1,6 +1,6 @@
 Package: rpsurv
 Title: Fast Royston-Parmar Flexible Parametric Survival Models
-Version: 0.8.1
+Version: 0.8.2
 Authors@R: person("Imad", "El Badisy", email = "elbadisyimad@gmail.com", role = c("aut", "cre"))
 Description: Fits Royston-Parmar flexible parametric survival models
     (Royston and Parmar, 2002) <doi:10.1002/sim.1203> on the log
@@ -27,8 +27,8 @@ Config/testthat/edition: 3
 VignetteBuilder: knitr
 LazyData: true
 NeedsCompilation: yes
-Packaged: 2026-11-02 23:23:48 UTC; imad-el-badisy
+Packaged: 2026-11-04 10:40:47 UTC; imad-el-badisy
 Author: Imad El Badisy [aut, cre]
 Maintainer: Imad El Badisy <elbadisyimad@gmail.com>
 Repository: CRAN
-Date/Publication: 2026-11-03 00:10:17 UTC
+Date/Publication: 2026-11-06 14:20:02 UTC

@@ -17,11 +17,18 @@ rp_link_fun <- function(scale) {
 
 # Spline df for one term: a single value, or a vector named by covariate.
 rp_term_df <- function(df, var, arg) {
-  if (length(df) == 1L && is.null(names(df))) return(as.integer(df))
-  if (is.null(names(df)) || !var %in% names(df)) {
-    stop("`", arg, "` must be a single value or a vector named by covariate (missing ", var, ")", call. = FALSE)
+  if (length(df) == 1L && is.null(names(df))) {
+    k <- df
+  } else {
+    if (is.null(names(df)) || !var %in% names(df)) {
+      stop("`", arg, "` must be a single value or a vector named by covariate (missing ", var, ")", call. = FALSE)
+    }
+    k <- df[[var]]
   }
-  as.integer(df[[var]])
+  if (!is.numeric(k) || !is.finite(k) || k < 1 || k != round(k)) {
+    stop("`", arg, "` for ", var, " must be a whole number >= 1", call. = FALSE)
+  }
+  as.integer(k)
 }
 
 rp_start_values <- function(time, status, p, scale, max_n = 20000L) {
@@ -84,6 +91,9 @@ rp_start_values <- function(time, status, p, scale, max_n = 20000L) {
 #' @param scale one of `"hazard"` (proportional hazards, the Royston-Parmar
 #'   default), `"odds"` (proportional odds) or `"normal"` (probit).
 #' @param control list of control parameters passed to [stats::optim()].
+#'   The optimisation runs on an internal orthogonalised parameterisation
+#'   (see Details), so parameter-scale settings such as `parscale` or
+#'   `ndeps` refer to that parameterisation.
 #'
 #' @details
 #' # Time-varying effect vs. time-varying covariate
@@ -105,6 +115,16 @@ rp_start_values <- function(time, status, p, scale, max_n = 20000L) {
 #' degrees of freedom, so the two components are fitted, reported, and
 #' extracted separately: [tvecurve()] returns beta(t) and [nlecurve()]
 #' returns g(x) - g(ref).
+#'
+#' # Estimation
+#' The log-likelihood and its analytic gradient are maximised with BFGS
+#' over a linear reparameterisation of the coefficients in which the design
+#' matrix has orthogonal, unit-scale columns (from its QR decomposition).
+#' This keeps the problem well conditioned when covariates on large scales
+#' multiply the time spline basis in `tve` terms. The Hessian is obtained by
+#' central differences of the analytic gradient in that parameterisation,
+#' and the coefficients and their variance-covariance matrix are mapped
+#' back exactly to the scale of the original design.
 #' @return an object of class `"rpsurv"`.
 #' @export
 rpsurv <- function(formula, data, df = 4, knots = NULL, tve = NULL, tve.df = 3,
@@ -129,6 +149,7 @@ rpsurv <- function(formula, data, df = 4, knots = NULL, tve = NULL, tve.df = 3,
     status <- resp[, 2L]
   }
   if (any(time <= 0)) stop("all exit times must be > 0", call. = FALSE)
+  if (!any(status == 1)) stop("no events in the data: the model cannot be fitted", call. = FALSE)
   if (any(entry < 0) || any(entry >= time)) stop("entry times must satisfy 0 <= start < stop", call. = FALSE)
   log_time <- log(time)
   has_entry <- as.numeric(entry > 0)
@@ -138,8 +159,30 @@ rpsurv <- function(formula, data, df = 4, knots = NULL, tve = NULL, tve.df = 3,
   log_entry_safe <- log(log_entry_safe)
 
   cov_terms <- attr(stats::terms(formula), "term.labels")
+  cov_tt <- NULL
+  xlevels <- NULL
+  contrasts <- NULL
+  cov_vars <- NULL
   if (length(cov_terms)) {
-    cov_data <- as.data.frame(stats::model.matrix(stats::reformulate(cov_terms, intercept = FALSE), mf))
+    # Build the covariate columns with an intercept and then drop it, so a
+    # factor is coded by treatment contrasts (k - 1 columns). Without the
+    # intercept, model.matrix() returns all k indicator columns of the first
+    # factor, which are collinear with the model's own intercept. The terms
+    # (with their predvars), factor levels and contrasts are kept so that
+    # new data given on the original variables is coded the same way.
+    cov_tt <- stats::delete.response(stats::terms(mf))
+    attr(cov_tt, "intercept") <- 1L
+    mm <- stats::model.matrix(cov_tt, mf)
+    xlevels <- stats::.getXlevels(cov_tt, mf)
+    contrasts <- attr(mm, "contrasts")
+    cov_data <- as.data.frame(mm[, colnames(mm) != "(Intercept)", drop = FALSE],
+                              optional = TRUE)
+    cov_vars <- tryCatch({
+      v <- stats::get_all_vars(cov_tt, data)
+      na_rows <- attr(mf, "na.action")
+      if (length(na_rows)) v <- v[-as.integer(na_rows), , drop = FALSE]
+      if (nrow(v) == nrow(cov_data)) v else NULL
+    }, error = function(e) NULL)
   } else {
     cov_data <- data.frame(row.names = seq_along(time))[FALSE, , drop = FALSE]
     cov_data <- cov_data[seq_along(time), , drop = FALSE]
@@ -148,14 +191,16 @@ rpsurv <- function(formula, data, df = 4, knots = NULL, tve = NULL, tve.df = 3,
   if (!is.null(tve)) {
     missing_tve <- setdiff(tve, names(cov_data))
     if (length(missing_tve)) {
-      stop("`tve` variable(s) not found among covariates: ", paste(missing_tve, collapse = ", "), call. = FALSE)
+      stop("`tve` variable(s) not found among covariates: ", paste(missing_tve, collapse = ", "),
+           rp_factor_hint(missing_tve, names(cov_data), xlevels), call. = FALSE)
     }
   }
 
   if (!is.null(nle)) {
     missing_nle <- setdiff(nle, names(cov_data))
     if (length(missing_nle)) {
-      stop("`nle` variable(s) not found among numeric covariates: ", paste(missing_nle, collapse = ", "), call. = FALSE)
+      stop("`nle` variable(s) not found among numeric covariates: ", paste(missing_nle, collapse = ", "),
+           rp_factor_hint(missing_nle, names(cov_data), xlevels), call. = FALSE)
     }
     if (anyDuplicated(nle)) stop("`nle` must not contain duplicates", call. = FALSE)
   }
@@ -164,6 +209,12 @@ rpsurv <- function(formula, data, df = 4, knots = NULL, tve = NULL, tve.df = 3,
     knots <- default_knots(log_time[status == 1], df)
   } else {
     knots <- sort(knots)
+    if (length(knots) < 2L || any(!is.finite(knots))) {
+      stop("`knots` must contain at least two finite values (the boundary knots)", call. = FALSE)
+    }
+    if (anyDuplicated(knots)) {
+      stop("`knots` must not contain duplicated values: a repeated knot gives an all-zero spline column", call. = FALSE)
+    }
   }
 
   tve_knots <- NULL
@@ -203,31 +254,57 @@ rpsurv <- function(formula, data, df = 4, knots = NULL, tve = NULL, tve.df = 3,
 
   beta0 <- rp_start_values(time, status, p, scale)
 
+  # Optimise over gamma = T^{-1} beta, with T chosen so that the working
+  # design X %*% T is orthogonal with unit-RMS columns. eta is linear in
+  # beta, so X, dX and Xentry all map through the same T and the likelihood
+  # is unchanged. Without this, products such as a tve covariate in the
+  # tens times a cubic spline in log time make the Hessian so ill
+  # conditioned that BFGS stops early and the finite-difference Hessian is
+  # not positive definite.
+  rp_check_rank(X)
+  Tm <- rp_reparam(X)
+  Z <- X %*% Tm
+  dZ <- dX %*% Tm
+  Zentry <- Xentry %*% Tm
+  gamma0 <- drop(solve(Tm, beta0))
+
   # optim() calls fn() then gr() at the same trial point on every BFGS step;
   # cache the (fused) C++ call so each point is only evaluated once
   cache <- new.env(parent = emptyenv())
-  evaluate <- function(beta) {
-    if (is.null(cache$beta) || !identical(beta, cache$beta)) {
-      cache$result <- rp_negloglik_grad_cpp(beta, X, dX, Xentry, has_entry, log_time, status_num, scale_code)
-      cache$beta <- beta
+  evaluate <- function(gamma) {
+    if (is.null(cache$gamma) || !identical(gamma, cache$gamma)) {
+      cache$result <- rp_negloglik_grad_cpp(gamma, Z, dZ, Zentry, has_entry, log_time, status_num, scale_code)
+      cache$gamma <- gamma
     }
     cache$result
   }
-  negloglik <- function(beta) evaluate(beta)$value
-  gradient  <- function(beta) evaluate(beta)$gradient
+  negloglik <- function(gamma) evaluate(gamma)$value
+  gradient  <- function(gamma) evaluate(gamma)$gradient
 
   opt_control <- utils::modifyList(list(maxit = 500, reltol = 1e-10), control)
-  fit <- stats::optim(beta0, negloglik, gradient, method = "BFGS",
+  fit <- stats::optim(gamma0, negloglik, gradient, method = "BFGS",
                        control = opt_control, hessian = TRUE)
+  if (fit$convergence != 0L) {
+    warning(sprintf(
+      "optim() did not converge (code %d%s): the estimates may not maximise the likelihood. Try a larger `control = list(maxit = )` or fewer spline df.",
+      fit$convergence, if (is.null(fit$message)) "" else paste0(", ", fit$message)
+    ), call. = FALSE)
+  }
+  if (fit$value >= 1e9) {
+    warning("at the final estimates the fitted cumulative hazard decreases over some observed follow-up (non-positive hazard at an event time, or survival increasing between entry and exit); the reported log-likelihood is a penalty value and the estimates are unreliable. Try fewer spline df.",
+            call. = FALSE)
+  }
 
-  vcov <- tryCatch(solve(fit$hessian), error = function(e) {
-    warning("Hessian not invertible; standard errors unavailable", call. = FALSE)
-    matrix(NA_real_, p, p)
-  })
+  # Hessian of the analytic gradient (central differences) in the working
+  # parameterisation, mapped back exactly: Var(beta) = T Var(gamma) T'.
+  hess <- (fit$hessian + t(fit$hessian)) / 2
+  vcov <- Tm %*% rp_invert_hessian(hess, if (fit$convergence == 0L) gradient(fit$par)) %*% t(Tm)
+  vcov <- (vcov + t(vcov)) / 2
+  beta <- drop(Tm %*% fit$par)
 
   structure(
     list(
-      coefficients = stats::setNames(fit$par, colnames(X)),
+      coefficients = stats::setNames(beta, colnames(X)),
       vcov = `dimnames<-`(vcov, list(colnames(X), colnames(X))),
       loglik = -fit$value,
       n = length(time),
@@ -241,6 +318,7 @@ rpsurv <- function(formula, data, df = 4, knots = NULL, tve = NULL, tve.df = 3,
       nle = nle,
       nle_knots = nle_knots,
       counting = counting,
+      na.action = attr(mf, "na.action"),
       formula = formula,
       call = match.call(),
       terms = stats::terms(formula),
@@ -251,10 +329,96 @@ rpsurv <- function(formula, data, df = 4, knots = NULL, tve = NULL, tve.df = 3,
       status = status,
       log_time = log_time,
       cov_data = cov_data,
+      cov_terms = cov_tt,
+      xlevels = xlevels,
+      contrasts = contrasts,
+      cov_vars = cov_vars,
       X = X,
       dX = dX,
       Xentry = Xentry
     ),
     class = "rpsurv"
   )
+}
+
+# For a `tve` / `nle` name that is a factor, list its design columns.
+#' @keywords internal
+rp_factor_hint <- function(missing, cols, xlevels) {
+  f <- intersect(missing, names(xlevels))
+  if (!length(f)) return("")
+  cand <- unlist(lapply(f, function(v) cols[startsWith(cols, v)]))
+  paste0(". A factor enters the model through its treatment-contrast indicator column(s); name those instead: ",
+         paste(cand, collapse = ", "))
+}
+
+# Warn when the design matrix is numerically rank deficient: the model is
+# then not identified (aliased columns), and its estimates and standard
+# errors are not meaningful.
+#' @keywords internal
+rp_check_rank <- function(X) {
+  q <- qr(X)
+  if (q$rank < ncol(X)) {
+    aliased <- colnames(X)[q$pivot[seq.int(q$rank + 1L, ncol(X))]]
+    warning(sprintf(
+      "the design matrix is rank deficient (rank %d < %d parameters): the model is not identified. Aliased column(s): %s. Remove collinear or constant covariates, or reduce the spline df.",
+      q$rank, ncol(X), paste(aliased, collapse = ", ")
+    ), call. = FALSE)
+  }
+  invisible(q$rank)
+}
+
+# Invert the (working-scale) Hessian of the negative log-likelihood. A
+# Hessian that is not finite, not positive definite, or singular gives a
+# single clear warning; a gradient that is still far from zero at a positive
+# definite Hessian means the optimiser stopped short of the maximum. The
+# inverse is returned whenever it exists (so behaviour is unchanged apart
+# from the warning), and NA otherwise.
+#' @keywords internal
+rp_invert_hessian <- function(hess, grad = NULL) {
+  p <- ncol(hess)
+  na <- matrix(NA_real_, p, p)
+  if (any(!is.finite(hess))) {
+    warning("the Hessian of the log-likelihood has non-finite entries; standard errors are unavailable (NA)",
+            call. = FALSE)
+    return(na)
+  }
+  ev <- eigen(hess, symmetric = TRUE, only.values = TRUE)$values
+  inv <- tryCatch(solve(hess), error = function(e) NULL)
+  if (is.null(inv)) {
+    warning("the Hessian of the log-likelihood is singular, so the variance-covariance matrix does not exist; standard errors are unavailable (NA). The model is probably not identified: check for collinear or constant covariates, or reduce the spline df.",
+            call. = FALSE)
+    return(na)
+  }
+  if (min(ev) <= 0) {
+    warning(sprintf(
+      "the Hessian of the log-likelihood is not positive definite (smallest eigenvalue %.3g): the fit is not at a well-defined maximum, so the variance-covariance matrix is not positive definite and some standard errors are NaN or unreliable. Common causes are too many spline df for the number of events, or a fitted hazard close to zero over part of follow-up.",
+      min(ev)
+    ), call. = FALSE)
+  } else if (!is.null(grad) && all(is.finite(grad))) {
+    decrement <- sum(grad * (inv %*% grad)) / 2
+    if (decrement > 1e-3) {
+      warning(sprintf(
+        "the optimiser stopped before reaching a stationary point (a Newton step would still raise the log-likelihood by about %.3g); estimates and standard errors may be inaccurate. Try a larger `control = list(maxit = )` or a smaller `reltol`.",
+        decrement
+      ), call. = FALSE)
+    }
+  }
+  inv
+}
+
+# Linear reparameterisation beta = T gamma used during optimisation: T is
+# sqrt(n) R^{-1} from the QR decomposition of X, so X %*% T has orthogonal
+# columns with unit mean square. If X is numerically rank deficient (the
+# model is then not identified anyway), fall back to scaling each column by
+# its largest absolute value, which is always invertible.
+#' @keywords internal
+rp_reparam <- function(X) {
+  p <- ncol(X)
+  q <- qr(X)
+  if (q$rank == p) {
+    return(backsolve(qr.R(q), diag(p))[order(q$pivot), , drop = FALSE] * sqrt(nrow(X)))
+  }
+  s <- apply(abs(X), 2L, max)
+  s[!is.finite(s) | s == 0] <- 1
+  diag(1 / s, nrow = p)
 }

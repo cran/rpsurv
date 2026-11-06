@@ -21,10 +21,24 @@ AIC.rpsurv <- function(object, ..., k = 2) -2 * object$loglik + k * object$df
 #' @export
 BIC.rpsurv <- function(object, ...) -2 * object$loglik + log(object$nevent) * object$df
 
+# Standard errors from the vcov diagonal. A negative or non-finite variance
+# (non-positive-definite vcov, already reported by rpsurv()) gives NA plus
+# one clear warning instead of R's generic "NaNs produced".
+rp_coef_se <- function(object) {
+  v <- diag(object$vcov)
+  bad <- !is.finite(v) | v < 0
+  if (any(bad)) {
+    warning("Standard errors are NA for ", paste(names(object$coefficients)[bad], collapse = ", "),
+            ": the variance-covariance matrix is not positive definite.", call. = FALSE)
+    v[bad] <- NA_real_
+  }
+  sqrt(v)
+}
+
 #' @importFrom stats confint
 #' @export
 confint.rpsurv <- function(object, parm, level = 0.95, ...) {
-  se <- sqrt(diag(object$vcov))
+  se <- rp_coef_se(object)
   b <- object$coefficients
   if (missing(parm)) parm <- names(b)
   z <- stats::qnorm(1 - (1 - level) / 2)
@@ -35,6 +49,16 @@ confint.rpsurv <- function(object, parm, level = 0.95, ...) {
   out
 }
 
+# "(k observations deleted due to missingness)", as in print.coxph()
+rp_na_note <- function(na_action) {
+  k <- length(na_action)
+  if (k) sprintf(" (%d observation%s deleted due to missingness)", k, if (k > 1L) "s" else "") else ""
+}
+
+# Log-likelihood, AIC and BIC with two decimals, so models can be compared
+# and LR tests done by hand; format() keeps the session's digits and scipen.
+rp_fmt_fit <- function(v) format(round(v, 2), nsmall = 2)
+
 is_baseline_term <- function(object) {
   seq_along(object$coefficients) <= object$p_base
 }
@@ -44,19 +68,19 @@ print.rpsurv <- function(x, digits = max(3L, getOption("digits") - 3L), ...) {
   cat("Royston-Parmar flexible parametric survival model\n")
   cat("Call:\n")
   print(x$call)
-  cat("\nScale:", x$scale, "  Baseline df:", x$p_base - 1L,
-      if (!is.null(x$tve)) paste0("  Time-varying effect: ", paste(x$tve, collapse = ", ")) else "",
-      if (!is.null(x$nle)) paste0("  Non-linear effect: ", paste(x$nle, collapse = ", ")) else "", "\n")
+  cat("\nScale: ", x$scale, "   Baseline df: ", x$p_base - 1L,
+      if (!is.null(x$tve)) paste0("   Time-varying effect: ", paste(x$tve, collapse = ", ")),
+      if (!is.null(x$nle)) paste0("   Non-linear effect: ", paste(x$nle, collapse = ", ")),
+      "\n", sep = "")
   if (isTRUE(x$counting)) cat("Data: counting-process (left truncation / time-varying covariates)\n")
-  cat("n =", x$n, ", number of events =", x$nevent, "\n")
-  cat("Log-likelihood =", format(x$loglik, digits = digits),
-      "  AIC =", format(AIC(x), digits = digits), "\n")
+  cat("n = ", x$n, ", number of events = ", x$nevent, rp_na_note(x$na.action), "\n", sep = "")
+  cat("Log-likelihood = ", rp_fmt_fit(x$loglik), ", AIC = ", rp_fmt_fit(AIC(x)), "\n", sep = "")
   invisible(x)
 }
 
 #' @export
 summary.rpsurv <- function(object, ...) {
-  se <- sqrt(diag(object$vcov))
+  se <- rp_coef_se(object)
   b <- object$coefficients
   z <- b / se
   p <- 2 * stats::pnorm(-abs(z))
@@ -77,7 +101,8 @@ summary.rpsurv <- function(object, ...) {
       bic = BIC(object),
       tve = object$tve,
       nle = object$nle,
-      counting = object$counting
+      counting = object$counting,
+      na.action = object$na.action
     ),
     class = "summary.rpsurv"
   )
@@ -102,14 +127,16 @@ print.summary.rpsurv <- function(x, digits = max(3L, getOption("digits") - 3L),
     cat("\n(no covariates in the model)\n")
   }
 
-  base_tab <- x$coefficients[x$baseline, , drop = FALSE]
+  # exp() of a spline coefficient has no interpretation, and a tiny value
+  # such as exp(intercept) would push the whole table into scientific notation
+  base_tab <- x$coefficients[x$baseline, colnames(x$coefficients) != "exp(coef)", drop = FALSE]
   cat("\nBaseline spline terms:\n")
   stats::printCoefmat(base_tab, digits = digits, signif.stars = FALSE,
                        P.values = TRUE, has.Pvalue = TRUE)
 
-  cat("\nn =", x$n, ", number of events =", x$nevent, ", parameters =", x$df, "\n")
-  cat("Log-likelihood =", format(x$loglik, digits = digits),
-      "  AIC =", format(x$aic, digits = digits),
-      "  BIC =", format(x$bic, digits = digits), "\n")
+  cat("\nn = ", x$n, ", number of events = ", x$nevent, ", parameters = ", x$df,
+      rp_na_note(x$na.action), "\n", sep = "")
+  cat("Log-likelihood = ", rp_fmt_fit(x$loglik), ", AIC = ", rp_fmt_fit(x$aic),
+      ", BIC = ", rp_fmt_fit(x$bic), "\n", sep = "")
   invisible(x)
 }

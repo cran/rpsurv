@@ -1,3 +1,106 @@
+# rpsurv 0.8.2
+
+* `plot()` gains `type = "coxsnell"` and `type = "km"` (with a `by` argument), so every built-in plot goes through `plot()`. They draw the same plots as `coxsnell_plot()` and `km_compare_plot()`, which are kept. Arguments that do not apply to a diagnostic (`newdata`, `times`, `ci`) give an error rather than being ignored.
+
+* `summary()` no longer shows `exp(coef)` for the baseline spline terms: it has no interpretation, and a tiny `exp(intercept)` pushed the whole table into scientific notation. Tables follow the session's `digits` and `scipen` options; log-likelihood, AIC and BIC are printed with two decimals in `print()` and `summary()`.
+
+* `predict()`, `rmst_diff()`, `plot()` and the other functions taking
+  `newdata` / `newdata0` now accept covariates on the original variables
+  of the formula, like `coxph()` and `stpm2()`: factors or character
+  values by their levels, untransformed numeric variables for terms such
+  as `log(karno)` or `poly(age, 2)`, and interactions. Previously a factor
+  had to be given as its treatment-contrast indicator columns (for example
+  `celltypeadeno`), otherwise `predict()` stopped with "`newdata` is
+  missing covariate(s)". The fit now stores its terms, factor levels and
+  contrasts; levels not seen when fitting give a clear error, and data
+  holding the indicator columns is still accepted. Naming a factor in
+  `tve` or `nle` now lists its indicator columns in the error.
+* `km_compare_plot()` compared Kaplan-Meier with the survival curve at
+  the mean covariate profile, a different estimand that is biased when
+  covariates vary. The model curve is now the population-averaged
+  survival of the group (mean of the individual predicted curves), and
+  for counting-process data (left truncation, time-varying covariates)
+  the cumulated average hazard of the rows at risk, which is what the
+  left-truncated Kaplan-Meier estimates. `by` failed for factors ("group
+  length is 0"); it now takes any variable of the formula or a grouping
+  vector (for example `cut(age, 3)`), gives each group its own colour and
+  a legend saying which group is which, and the plotted coordinates are
+  returned invisibly.
+* `plot.rpsurv()`: the y axis now covers the confidence band (it was set
+  from the point estimates only, so the band was clipped); survival is
+  drawn on [0, 1]. The default profile no longer averages factor
+  indicator columns into a non-existent "mean" level: numeric variables
+  are at their mean and factors at their most common level. Several
+  curves get a legend labelled from the `newdata` rows, placed in the
+  emptiest corner (`legend` argument). `type = "hazard"` now also draws
+  its confidence band.
+* `plot.tvecurve()`: the default y label said "per unit" of the
+  covariate for `type = "hr"`, but the hazard ratio is for `ref + 1`
+  versus `ref` and depends on `ref` under a time-varying effect; the label
+  now says so. For `type = "link"` the label names the model scale (log
+  cumulative hazard ratio, log cumulative odds ratio, or probit-scale
+  effect) instead of a generic "beta(t)".
+* `coxsnell_plot()` now uses the Nelson-Aalen estimator as documented
+  (it used `-log` of Kaplan-Meier, infinite when the last residual is an
+  event), and draws both axes on the same range from 0 so the y = x line
+  is the diagonal.
+* `plot.rpsurv()`, `km_compare_plot()` and `coxsnell_plot()` accept `xlab`
+  and `ylab` in `...` (previously an error, "formal argument matched by
+  multiple actual arguments").
+
+* `summary()` and `confint()` give NA standard errors with one clear warning when the vcov is not positive definite, instead of R's generic "NaNs produced".
+
+* Fixed non-positive-definite variance-covariance matrices (NaN standard
+  errors, "NaNs produced" in `summary()`) for fits with a time-varying
+  effect of a covariate on a large scale, e.g. `tve = "karno"` on
+  `veteran`. The covariate times the cubic spline in log time made the
+  optimisation badly conditioned, so the optimiser stopped early and the
+  finite-difference Hessian was indefinite. `rpsurv()` now optimises over
+  an orthogonalised linear reparameterisation of the design (from its QR
+  decomposition) and maps the coefficients and variance-covariance matrix
+  back exactly. Standard errors of `tve` fits on continuous covariates now
+  agree with `rstpm2::stpm2()`; earlier finite standard errors for such
+  fits could also be inaccurate. Point estimates are unchanged up to
+  optimiser tolerance. Settings in `control` such as `parscale` now refer
+  to the internal parameterisation.
+* Factor covariates are now coded by treatment contrasts (one column per
+  non-reference level). Previously the first factor in the formula got an
+  indicator column for every level, which is collinear with the model
+  intercept: the model was not identified and its standard errors were
+  NaN, without a warning. Factor fits now match `rstpm2::stpm2()`.
+* `predict(type = "cumhaz", se.fit = TRUE)` returned the confidence
+  limits swapped (`lower` above `upper`). The cumulative hazard and its
+  limits are now computed directly from the linear predictor, so they no
+  longer overflow to `Inf` when the survival probability underflows to 0
+  (also used by `residuals()`).
+* `rpsurv()` no longer fails silently. It now warns when `optim()` does
+  not converge (`convergence != 0`), when the optimiser stops short of a
+  stationary point, when the design matrix is rank deficient (naming the
+  aliased columns), when the Hessian is singular or not finite (standard
+  errors `NA`), when the Hessian is not positive definite (one warning; the
+  variance-covariance matrix is then not positive definite and
+  `summary()` / `confint()` report the affected standard errors as `NA`), and when the final estimates sit on the
+  likelihood penalty for a decreasing cumulative hazard. Tied centiles
+  that merge spline knots now warn, like knots dropped at a boundary.
+* `rpsurv()` now stops with an informative error for data without events,
+  non-integer or non-positive `df`, `tve.df` or `nle.df` (previously
+  truncated silently), and duplicated user `knots`.
+* `print()` and `summary()` report observations dropped because of missing
+  values, as `print.coxph()` does.
+* `predict()`, `tvecurve()` and `rmst_diff()` now reject non-positive or
+  non-finite `times` / `tau` (time 0 previously gave `NaN` silently).
+  `predict()`, `tvecurve()`, `nlecurve()` and `rmst_diff()` warn once,
+  with the reason, when the fitted hazard is not positive at some
+  evaluation points (hazard-based estimates are then negative or `NaN`),
+  when the variance-covariance matrix is unavailable, or when standard
+  errors are `NaN` because it is not positive definite. `residuals()`
+  warns about negative or non-finite Cox-Snell residuals.
+* New tests validate `nle` fits, alone and combined with `tve`, on the
+  hazard, odds and probit scales against `rstpm2::stpm2()` with the same
+  natural-spline model space (log-likelihood, coefficients and full
+  variance-covariance matrix), and check `nlecurve()` and `tvecurve()`
+  standard errors against a numerical delta method.
+
 # rpsurv 0.8.1
 
 * `tvecurve()` and `nlecurve()` now return data frames of class
